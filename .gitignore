@@ -1,0 +1,28 @@
+# API keys and local configuration — NEVER commit this
+config.json
+
+# Local cache database
+cache/
+
+# Query logs — may contain sensitive IP data
+logs/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Generated output files
+*.html
+*.csv
+iocs.txt
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor directories
+.vscode/
+.idea/
