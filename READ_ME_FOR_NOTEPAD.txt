@@ -1,189 +1,92 @@
 ================================================================================
-  THREATCHECK — README
+  ThreatCheck — Multi-Source IP Reputation & Threat Intelligence CLI
 ================================================================================
 
-A multi-source IP reputation and threat intelligence tool. Checks IPs against
-AbuseIPDB, VirusTotal, GreyNoise, and IPInfo, then combines the results into
-a single verdict with confidence scoring, IOC tags, delta tracking, and a
-daily news briefing from 13 live threat intel feeds.
+A CLI tool that checks public IPs against five enrichment sources and produces
+verdicts, HTML reports, CSV exports, and defanged IOC lists.
 
+SOURCES
+-------
+  AbuseIPDB           Abuse reports, confidence score, ISP, country   [KEY REQUIRED]
+  VirusTotal          AV engine detections, AS owner, reputation       [KEY REQUIRED]
+  GreyNoise           Noise classification, RIOT, last seen            [KEY REQUIRED - free tier available]
+  Shodan (InternetDB) Open ports, CVEs, tags, CPEs, hostnames          [NO KEY NEEDED]
+  IPInfo              Geolocation, ASN, org, hostname, timezone        [NO KEY NEEDED]
 
---------------------------------------------------------------------------------
-  REQUIREMENTS
---------------------------------------------------------------------------------
+REQUIREMENTS
+------------
+  Python 3.7+
+  No external dependencies — stdlib only
 
-  - Python 3.8 or newer
-  - AbuseIPDB API key  (free at abuseipdb.com — required)
-  - VirusTotal API key (free at virustotal.com — recommended)
-  - GreyNoise API key  (free community tier at greynoise.io — recommended)
+SETUP
+-----
+  1. Copy config.json.example to config.json
+  2. Add your API keys to config.json
+  3. Run it
 
+  Keys are saved automatically on first run if config.json is not present.
 
---------------------------------------------------------------------------------
-  QUICK START
---------------------------------------------------------------------------------
-
-  Double-click run_threatcheck.bat to open the interactive prompt.
-
-  Or from the command line:
-    python threatcheck.py 8.8.8.8
-
-  On first run you will be asked for your API keys. They are saved to
-  config.json and never need to be entered again.
-
-
---------------------------------------------------------------------------------
-  FILES
---------------------------------------------------------------------------------
-
-  threatcheck.py      Main entry point and CLI
-  enrichment.py       Queries AbuseIPDB, VirusTotal, IPInfo
-  greynoise.py        GreyNoise Community API source
-  verdict.py          Weighted scoring and verdict engine
-  cache.py            SQLite-backed local cache (default 6h TTL)
-  delta.py            Tracks changes between checks for the same IP
-  threat_intel.py     Threat intelligence news feed aggregator
-  report.py           HTML report generator
-  run_threatcheck.bat Windows interactive launcher
-
-
---------------------------------------------------------------------------------
-  IP CHECKS
---------------------------------------------------------------------------------
-
+USAGE
+-----
   Single IP:
     python threatcheck.py 8.8.8.8
 
-  CIDR range (up to 256 hosts):
+  CIDR range (auto-expanded, capped at 256 hosts):
     python threatcheck.py 192.168.1.0/24
 
-  Batch file (one IP or CIDR per line, # for comments):
+  Batch file (one IP or CIDR per line):
     python threatcheck.py --batch ips.txt
 
-  Private, loopback, and reserved IPs are detected and skipped automatically.
+  Batch with full outputs:
+    python threatcheck.py --batch ips.txt --report report.html --export results.csv --ioc iocs.txt
 
+  Pipe-friendly JSON output:
+    python threatcheck.py 8.8.8.8 --quiet --json
 
---------------------------------------------------------------------------------
-  VERDICT ENGINE
---------------------------------------------------------------------------------
+  Defanged output:
+    python threatcheck.py 8.8.8.8 --defang
 
-  Each IP is scored across up to 4 sources:
-
-    AbuseIPDB   35%  — community abuse reports
-    VirusTotal  35%  — AV engine consensus
-    GreyNoise   20%  — noise vs targeted classification
-    IPInfo      10%  — geo/ASN context only
-
-  Verdicts   : MALICIOUS / SUSPICIOUS / CLEAN / UNKNOWN
-  Confidence : HIGH / MEDIUM / LOW
-
-  GreyNoise overrides apply. If an IP is a known benign internet scanner
-  (e.g. Censys, Shodan), the verdict is capped at SUSPICIOUS regardless of
-  AbuseIPDB and VirusTotal scores, with an explanation in the summary.
-
-
---------------------------------------------------------------------------------
-  IOC TAGS
---------------------------------------------------------------------------------
-
-  Automatically derived from source data:
-
-  SCANNER  KNOWN_BENIGN  TOR_EXIT  VPN  PROXY  CDN  HOSTING
-  BOTNET   SPAM  BRUTE_FORCE  MALWARE_C2  PHISHING
-
-
---------------------------------------------------------------------------------
-  OUTPUT OPTIONS
---------------------------------------------------------------------------------
-
-  Export to CSV:
-    python threatcheck.py --batch ips.txt --export results.csv
-
-  Generate HTML report (dark theme, sortable, filterable):
-    python threatcheck.py --batch ips.txt --report report.html
-
-  Export defanged malicious IPs as IOC list:
-    python threatcheck.py --batch ips.txt --ioc iocs.txt
-
-  Defanged output (1.2.3[.]4):
-    python threatcheck.py 1.2.3.4 --defang
-
-  JSON output for piping:
-    python threatcheck.py 1.2.3.4 --quiet --json
-
-
---------------------------------------------------------------------------------
-  NEWS BRIEFING
---------------------------------------------------------------------------------
-
-  From the interactive launcher:
-    n          last 24 hours (default)
-    n 48       last 48 hours
-    n 7d       last 7 days
-    n all      no date filter
-
-  From the command line:
+  Threat intel news feed:
     python threatcheck.py --news
-    python threatcheck.py --news --news-since 7d
-    python threatcheck.py --news --news-filter "ransomware,CVE"
-    python threatcheck.py --news --news-save briefing.html
-    python threatcheck.py --news --news-max 5
+    python threatcheck.py --news --news-filter "ransomware,CVE" --news-since 48
 
-  Sources:
-    General    : The Hacker News, BleepingComputer
-    Government : CISA Advisories, CISA KEV, Google TAG
-    Technical  : The DFIR Report, Red Canary, Unit 42, Mandiant
-    Vulns      : NVD Recent CVEs, SANS ISC, Exploit-DB
-    Live Feeds : Feodo Tracker C2
+  Cache management:
+    python threatcheck.py --cache-stats
+    python threatcheck.py --cache-purge
 
-  Severity tags fire automatically on keywords:
-    CRITICAL — zero-day, actively exploited, ransomware, nation-state, RCE
-    NOTABLE  — critical severity, data breach, malware, exploit, vulnerability
+OUTPUT FLAGS
+------------
+  --report FILE     HTML report with verdict summary
+  --export FILE     CSV with all enrichment fields per IP
+  --ioc FILE        Defanged IOC list of malicious IPs only
+  --json            Clean JSON to stdout for piping
+  --defang          Print IPs in 1.2.3[.]4 format
 
+OPTIONS
+-------
+  --batch FILE        File with one IP/CIDR per line
+  --days N            AbuseIPDB lookback window in days (default: 90)
+  --no-cache          Bypass cache, force fresh API calls
+  --cache-ttl N       Cache TTL in seconds (default: 21600 = 6h)
+  --quiet             Suppress terminal output (use with --json)
+  --abuse-key KEY     AbuseIPDB key override (not saved)
+  --vt-key KEY        VirusTotal key override (not saved)
+  --gn-key KEY        GreyNoise key override (not saved)
+  --shodan-key KEY    Shodan key override (not saved)
+  --ipinfo-token TOK  IPInfo token override (not saved)
 
---------------------------------------------------------------------------------
-  CACHE
---------------------------------------------------------------------------------
+LOGS
+----
+  Results are automatically saved to logs/threat_log.json
 
-  Results cache locally in cache/threatcheck_cache.db (default TTL: 6 hours).
+================================================================================
+  SECURITY NOTICE
+================================================================================
 
-    python threatcheck.py --cache-stats     Show cache statistics
-    python threatcheck.py --cache-purge     Remove expired entries
-    python threatcheck.py --no-cache        Bypass cache, force fresh queries
-    python threatcheck.py --cache-ttl 3600  Set custom TTL in seconds
+  Your config.json contains live API keys. NEVER share it or commit it to
+  version control. It should be listed in .gitignore.
 
-
---------------------------------------------------------------------------------
-  DELTA TRACKING
---------------------------------------------------------------------------------
-
-  When an IP is checked more than once, ThreatCheck compares results against
-  the last log entry and surfaces meaningful changes:
-
-    - Verdict escalation or de-escalation
-    - Composite score shift (5+ points)
-    - New or removed IOC tags
-    - AbuseIPDB score change
-    - VirusTotal engine count change
-    - GreyNoise classification change
-
-
---------------------------------------------------------------------------------
-  LOGS
---------------------------------------------------------------------------------
-
-  All results are saved to logs/threat_log.json.
-
-
---------------------------------------------------------------------------------
-  SECURITY CHECKLIST
---------------------------------------------------------------------------------
-
-  config.json contains your API keys. DO NOT SHARE IT.
-
-  If sharing ThreatCheck with others, share only the source .py files and
-  the .bat launcher — never your config.json.
-
-  Keep a personal copy renamed so you know which one has your keys in it.
-  The version you share should have no config.json included.
+  This copy of the tool (from the public repo) has NO keys in it. You must
+  supply your own keys via config.json or the interactive setup prompt.
 
 ================================================================================
