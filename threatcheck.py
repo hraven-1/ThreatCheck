@@ -2,7 +2,7 @@
 threatcheck.py — ThreatCheck CLI
 Multi-source IP reputation checker.
 
-Sources  : AbuseIPDB · VirusTotal · GreyNoise · IPInfo
+Sources  : AbuseIPDB · VirusTotal · GreyNoise · IPInfo · Shodan (InternetDB)
 Features : CIDR expansion · batch processing · delta tracking ·
            HTML reports · IOC export · defang · pipe-friendly JSON mode ·
            local SQLite cache
@@ -63,6 +63,7 @@ def load_api_keys():
         "virustotal": cfg.get("virustotal_key"),
         "greynoise":  cfg.get("greynoise_key"),
         "ipinfo":     cfg.get("ipinfo_token"),
+        "shodan":     cfg.get("shodan_key"),
     }
 
 
@@ -72,6 +73,7 @@ def save_api_key(name, value):
         "virustotal": "virustotal_key",
         "greynoise":  "greynoise_key",
         "ipinfo":     "ipinfo_token",
+        "shodan":     "shodan_key",
     }
     cfg = load_config()
     cfg[field_map[name]] = value
@@ -265,6 +267,24 @@ def _print_enrichment_details(enrichment_results):
             if gn.get("message"):
                 print(f"    Message      : {gn.get('message')}")
 
+    shodan = enrichment_results.get("shodan", {})
+    if shodan.get("status") not in ("Skipped", "Unknown", None):
+        print()
+        print("  ── Shodan (InternetDB) ───────────────────────")
+        if shodan.get("error") and shodan["status"] not in ("OK",):
+            print(f"    [!] {shodan['error']}")
+        else:
+            ports     = shodan.get("ports")     or []
+            vulns     = shodan.get("vulns")     or []
+            tags      = shodan.get("tags")      or []
+            cpes      = shodan.get("cpes")      or []
+            hostnames = shodan.get("hostnames") or []
+            print(f"    Open Ports   : {', '.join(str(p) for p in ports) if ports else 'None'}")
+            print(f"    Hostnames    : {', '.join(hostnames) if hostnames else 'None'}")
+            print(f"    Tags         : {', '.join(tags) if tags else 'None'}")
+            print(f"    CPEs         : {', '.join(cpes) if cpes else 'None'}")
+            print(f"    Vulns (CVEs) : {', '.join(vulns) if vulns else 'None'}")
+
     ipinfo = enrichment_results.get("ipinfo", {})
     if ipinfo.get("status") not in ("Unknown", None):
         print()
@@ -334,6 +354,7 @@ def export_csv(results, export_path):
         vt    = (r.get("enrichment_results") or {}).get("virustotal") or {}
         gn    = (r.get("enrichment_results") or {}).get("greynoise") or {}
         info  = (r.get("enrichment_results") or {}).get("ipinfo") or {}
+        shodan = (r.get("enrichment_results") or {}).get("shodan") or {}
         d     = r.get("_delta") or {}
         rows.append({
             "timestamp":           r.get("timestamp", ""),
@@ -362,6 +383,11 @@ def export_csv(results, export_path):
             "gn_noise":            gn.get("noise", ""),
             "gn_riot":             gn.get("riot", ""),
             "gn_name":             gn.get("name", ""),
+            "shodan_ports":        "|".join(str(p) for p in (shodan.get("ports") or [])),
+            "shodan_vulns":        "|".join(shodan.get("vulns") or []),
+            "shodan_tags":         "|".join(shodan.get("tags") or []),
+            "shodan_cpes":         "|".join(shodan.get("cpes") or []),
+            "shodan_hostnames":    "|".join(shodan.get("hostnames") or []),
             "hostname":            info.get("hostname", ""),
             "city":                info.get("city", ""),
             "region":              info.get("region", ""),
@@ -425,6 +451,8 @@ def interactive_key_setup(keys):
                        "    Enter VirusTotal key (or Enter to skip): "),
         ("greynoise",  "[?] GreyNoise API Key not found (optional - free tier at greynoise.io).",
                        "    Enter GreyNoise key (or Enter to skip): "),
+        ("shodan",     "[?] Shodan API Key not found (optional - free at shodan.io, used for future full-host lookups).",
+                       "    Enter Shodan key (or Enter to skip): "),
     ]
 
     any_prompted = False
@@ -502,6 +530,7 @@ Examples:
     parser.add_argument("--vt-key",        metavar="KEY",        help="VirusTotal API key override")
     parser.add_argument("--gn-key",        metavar="KEY",        help="GreyNoise API key override")
     parser.add_argument("--ipinfo-token",  metavar="TOKEN",      help="IPInfo token override")
+    parser.add_argument("--shodan-key",    metavar="KEY",        help="Shodan API key override")
 
     args = parser.parse_args()
 
@@ -544,9 +573,10 @@ Examples:
     if args.vt_key:       keys["virustotal"] = args.vt_key
     if args.gn_key:       keys["greynoise"]  = args.gn_key
     if args.ipinfo_token: keys["ipinfo"]     = args.ipinfo_token
+    if args.shodan_key:   keys["shodan"]     = args.shodan_key
 
     # Prompt for any missing keys — runs even if AbuseIPDB is already configured
-    missing = [k for k in ("abuseipdb", "virustotal", "greynoise") if not keys.get(k)]
+    missing = [k for k in ("abuseipdb", "virustotal", "greynoise", "shodan") if not keys.get(k)]
     if missing and not _QUIET:
         keys = interactive_key_setup(keys)
 

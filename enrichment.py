@@ -6,6 +6,7 @@ Sources:
   - VirusTotal  : Malware/phishing detections by AV engines (requires API key)
   - GreyNoise   : Internet noise vs targeted threat context (requires API key)
   - IPInfo      : Geolocation, ASN, org, hostname           (free tier, no key required)
+  - Shodan      : Open ports, CVEs, tags, CPEs, hostnames   (InternetDB — free, no key required)
 """
 
 import json
@@ -15,6 +16,7 @@ import urllib.error
 import ssl
 import cache as cache_module
 import greynoise as greynoise_module
+import enrichment_shodan as shodan_module
 
 # --------------------------------------------------------------------------- #
 #  Shared helpers
@@ -236,6 +238,8 @@ def enrich(ip_str, keys, max_age_days=90, use_cache=True, cache_ttl=21600):
         "virustotal" -> VirusTotal API key     (optional, recommended)
         "greynoise"  -> GreyNoise API key      (optional, free community tier)
         "ipinfo"     -> IPInfo token           (optional, free tier works)
+        "shodan"     -> Shodan API key         (optional, stored for future full-host lookups;
+                                                InternetDB enrichment runs regardless — no key needed)
     """
     results = {}
 
@@ -260,6 +264,10 @@ def enrich(ip_str, keys, max_age_days=90, use_cache=True, cache_ttl=21600):
         if keys.get("greynoise")
         else {"source": "greynoise", "status": "Skipped", "error": "No API key"}
     )
+
+    # Shodan InternetDB — always runs, no key required.
+    # api_key passed for future full-host lookup compatibility.
+    results["shodan"] = shodan_module.enrich(ip_str, api_key=keys.get("shodan"))
 
     # IPInfo always runs — free tier, no key required
     results["ipinfo"] = check_ipinfo(
