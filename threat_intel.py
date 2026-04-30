@@ -28,6 +28,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.utils import parsedate_to_datetime
+import ioc_extractor as ioc_module
 
 # --------------------------------------------------------------------------- #
 #  Config
@@ -354,16 +355,20 @@ SEV_PREFIX = {
 
 
 def display_news(max_items=DEFAULT_MAX_ITEMS, keywords=None,
-                 since=None, save_path=None):
+                 since=None, save_path=None,
+                 extract_iocs=False, to_batch=None, enrich_callback=None):
     """
     Fetch and display threat intel news.
 
     Args:
-        max_items : Articles per source
-        keywords  : List of keyword strings to filter on (None = no filter)
-        since     : Hours lookback as int, or string like '7d'. None = 24h.
-                    Pass 0 or 'all' to disable date filtering entirely.
-        save_path : If set, write an HTML digest to this path
+        max_items       : Articles per source
+        keywords        : List of keyword strings to filter on (None = no filter)
+        since           : Hours lookback as int, or string like '7d'. None = 24h.
+                          Pass 0 or 'all' to disable date filtering entirely.
+        save_path       : If set, write an HTML digest to this path
+        extract_iocs    : If True, extract and display IOCs from each article title
+        to_batch        : If set, write all extracted IPs to this file path
+        enrich_callback : If set, called with list of IPs after batch file is written
     """
     # Build cutoff datetime
     if since == 0 or str(since).lower() == "all":
@@ -399,6 +404,7 @@ def display_news(max_items=DEFAULT_MAX_ITEMS, keywords=None,
     all_for_save     = []
     total_shown      = 0
     current_category = None
+    all_extracted_ips = []   # collected across all articles for --to-batch
 
     for i in range(len(SOURCES)):
         name, category, articles, error = ordered_results.get(
@@ -435,12 +441,47 @@ def display_news(max_items=DEFAULT_MAX_ITEMS, keywords=None,
                 print(f"  {prefix} {clean}{date_s}")
                 print(f"       {link}")
 
+            # IOC extraction — runs on title text
+            if extract_iocs or to_batch:
+                result = ioc_module.IOCExtractor.extract(title)
+                iocs   = result.get("iocs", {})
+                refs   = result.get("references", {})
+                if iocs or refs:
+                    print(ioc_module.IOCExtractor.format_for_display(result, indent=7))
+                if to_batch and iocs.get("ipv4"):
+                    all_extracted_ips.extend(iocs["ipv4"])
+
             total_shown += 1
             all_for_save.append((name, category, article))
 
     print(f"\n{'='*54}")
     print(f"  {total_shown} article(s) in window")
     print(f"{'='*54}\n")
+
+    # Write extracted IPs to batch file
+    if to_batch and all_extracted_ips:
+        unique_ips    = sorted(set(all_extracted_ips))
+        dupe_count    = len(all_extracted_ips) - len(unique_ips)
+        try:
+            os.makedirs(os.path.dirname(to_batch) if os.path.dirname(to_batch) else ".", exist_ok=True)
+            with open(to_batch, "w", encoding="utf-8") as f:
+                f.write(f"# ThreatCheck IOC Batch — extracted from news feed\n")
+                f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# {len(all_extracted_ips)} total IPs "
+                        f"({len(unique_ips)} unique, {dupe_count} dupes kept for cache coverage)\n\n")
+                for ip in all_extracted_ips:   # dupes kept intentionally
+                    f.write(ip + "\n")
+            print(f"[-] Extracted {len(all_extracted_ips)} IPs "
+                  f"({len(unique_ips)} unique) → {to_batch}")
+        except IOError as e:
+            print(f"[!] Error writing batch file: {e}")
+
+        if enrich_callback and all_extracted_ips:
+            print(f"[-] Starting enrichment on extracted IPs...\n")
+            enrich_callback(all_extracted_ips)
+
+    elif to_batch and not all_extracted_ips:
+        print(f"[-] No public IPs found in article titles — batch file not written.")
 
     if save_path and all_for_save:
         _save_digest(all_for_save, save_path, keywords, since_str)

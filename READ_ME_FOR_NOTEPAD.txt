@@ -3,7 +3,8 @@
 ================================================================================
 
 A CLI tool that checks public IPs against five enrichment sources and produces
-verdicts, HTML reports, CSV exports, and defanged IOC lists.
+verdicts, HTML reports, CSV exports, and defanged IOC lists. Includes IOC
+extraction from news feeds, PDFs, and TAXII threat intelligence collections.
 
 SOURCES
 -------
@@ -16,7 +17,11 @@ SOURCES
 REQUIREMENTS
 ------------
   Python 3.7+
-  No external dependencies — stdlib only
+  No required dependencies — stdlib only for core features.
+
+  Optional (install to enable extended features):
+    pip install pdfplumber     # PDF IOC extraction (--pdf)
+    pip install taxii2-client  # TAXII feed integration (--taxii)
 
 SETUP
 -----
@@ -48,11 +53,41 @@ USAGE
 
   Threat intel news feed:
     python threatcheck.py --news
+    python threatcheck.py --news --ioc-extract
     python threatcheck.py --news --news-filter "ransomware,CVE" --news-since 48
+
+  News feed to batch to enrichment pipeline:
+    python threatcheck.py --news --ioc-extract --to-batch leads.txt
+    python threatcheck.py --news --ioc-extract --to-batch leads.txt --enrich
+    python threatcheck.py --news --ioc-extract --to-batch leads.txt --enrich --export results.csv
+
+  PDF IOC extraction:
+    python threatcheck.py --pdf advisory.pdf
+    python threatcheck.py --pdf advisory.pdf --to-batch leads.txt
+    python threatcheck.py --pdf advisory.pdf --to-batch leads.txt --enrich --export results.csv
+
+  TAXII feed integration:
+    python threatcheck.py --taxii
+    python threatcheck.py --taxii --to-batch taxii_leads.txt
+    python threatcheck.py --taxii --to-batch taxii_leads.txt --enrich
+    python threatcheck.py --taxii --taxii-since 2026-04-29T00:00:00.000Z --to-batch leads.txt --enrich
 
   Cache management:
     python threatcheck.py --cache-stats
     python threatcheck.py --cache-purge
+
+IOC EXTRACTION
+--------------
+  ThreatCheck extracts IOCs from news article titles, PDFs, and TAXII feeds.
+  Results are split into two categories:
+
+  Threat IOCs     IPs, CVEs, hashes, and unknown domains (potential malicious infrastructure)
+  Reference Mentions  Whitelisted domains — vendors, government sites, cited sources.
+                      These are displayed separately and NOT sent to batch/enrich.
+
+  Handles defanged indicators automatically:
+    1.2.3[.]4  ->  1.2.3.4
+    hXXps://   ->  https://
 
 OUTPUT FLAGS
 ------------
@@ -61,19 +96,27 @@ OUTPUT FLAGS
   --ioc FILE        Defanged IOC list of malicious IPs only
   --json            Clean JSON to stdout for piping
   --defang          Print IPs in 1.2.3[.]4 format
+  --to-batch FILE   Write extracted IPs (from news/PDF/TAXII) to batch file
+  --enrich          Immediately enrich IPs written to --to-batch
 
 OPTIONS
 -------
-  --batch FILE        File with one IP/CIDR per line
-  --days N            AbuseIPDB lookback window in days (default: 90)
-  --no-cache          Bypass cache, force fresh API calls
-  --cache-ttl N       Cache TTL in seconds (default: 21600 = 6h)
-  --quiet             Suppress terminal output (use with --json)
-  --abuse-key KEY     AbuseIPDB key override (not saved)
-  --vt-key KEY        VirusTotal key override (not saved)
-  --gn-key KEY        GreyNoise key override (not saved)
-  --shodan-key KEY    Shodan key override (not saved)
-  --ipinfo-token TOK  IPInfo token override (not saved)
+  --batch FILE          File with one IP/CIDR per line
+  --pdf FILE            Extract IOCs from a PDF file
+  --taxii               Pull IP indicators from configured TAXII collections
+  --taxii-since TIME    Only fetch indicators added after this ISO timestamp
+  --days N              AbuseIPDB lookback window in days (default: 90)
+  --no-cache            Bypass cache, force fresh API calls
+  --cache-ttl N         Cache TTL in seconds (default: 21600 = 6h)
+  --quiet               Suppress terminal output (use with --json)
+  --ioc-extract         Extract and display IOCs from news article titles
+  --to-batch FILE       Write extracted IPs to batch file
+  --enrich              Immediately enrich IPs from --to-batch
+  --abuse-key KEY       AbuseIPDB key override (not saved)
+  --vt-key KEY          VirusTotal key override (not saved)
+  --gn-key KEY          GreyNoise key override (not saved)
+  --shodan-key KEY      Shodan key override (not saved)
+  --ipinfo-token TOK    IPInfo token override (not saved)
 
 LOGS
 ----

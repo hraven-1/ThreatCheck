@@ -21,10 +21,12 @@ from datetime import datetime
 
 import threat_intel
 import enrichment
-import verdict   as verdict_module
-import cache     as cache_module
-import delta     as delta_module
-import report    as report_module
+import verdict      as verdict_module
+import cache        as cache_module
+import delta        as delta_module
+import report       as report_module
+import pdf_ingest   as pdf_module
+import taxii_source as taxii_module
 
 API_CONFIG_FILE = "config.json"
 
@@ -492,6 +494,16 @@ Examples:
   python threatcheck.py --batch ips.txt --ioc iocs.txt --export results.csv
   python threatcheck.py 8.8.8.8 --quiet --json
   python threatcheck.py --news
+  python threatcheck.py --news --ioc-extract
+  python threatcheck.py --news --ioc-extract --to-batch extracted.txt
+  python threatcheck.py --news --ioc-extract --to-batch extracted.txt --enrich
+  python threatcheck.py --news --ioc-extract --to-batch extracted.txt --enrich --export results.csv
+  python threatcheck.py --pdf report.pdf
+  python threatcheck.py --pdf report.pdf --to-batch leads.txt --enrich --export results.csv
+  python threatcheck.py --taxii
+  python threatcheck.py --taxii --to-batch taxii_leads.txt
+  python threatcheck.py --taxii --to-batch taxii_leads.txt --enrich
+  python threatcheck.py --taxii --taxii-since 2026-04-29T00:00:00.000Z --to-batch leads.txt --enrich --export results.csv
   python threatcheck.py --cache-stats
         """
     )
@@ -501,6 +513,9 @@ Examples:
 
     # Input modes
     parser.add_argument("--batch",         metavar="FILE",       help="File with one IP/CIDR per line")
+    parser.add_argument("--pdf",           metavar="FILE",       help="Extract IOCs from a PDF file")
+    parser.add_argument("--taxii",         action="store_true",  help="Pull IP indicators from configured TAXII collections")
+    parser.add_argument("--taxii-since",   metavar="TIMESTAMP",  help="Only fetch indicators added after this ISO timestamp (default: 24h ago)")
 
     # Output modes
     parser.add_argument("--export",        metavar="FILE",       help="Export results to CSV")
@@ -516,6 +531,9 @@ Examples:
     parser.add_argument("--news-since",    metavar="N",          help="Lookback window: hours (e.g. 24) or days (e.g. 7d). Default 24h. Use 'all' for no filter.")
     parser.add_argument("--news-save",     metavar="FILE",       help="Save news digest as HTML file")
     parser.add_argument("--news-max",      type=int, default=3,  help="Articles per source (default: 3)")
+    parser.add_argument("--ioc-extract",   action="store_true",  help="Extract and display IOCs from news article titles")
+    parser.add_argument("--to-batch",      metavar="FILE",       help="Write IPs extracted from news/PDF to a batch file")
+    parser.add_argument("--enrich",        action="store_true",  help="Immediately enrich IPs written to --to-batch")
 
     # API options
     parser.add_argument("--days",          type=int, default=90, help="AbuseIPDB lookback window in days (default: 90)")
@@ -555,12 +573,143 @@ Examples:
 
     if args.news:
         kws = [k.strip() for k in args.news_filter.split(",")] if args.news_filter else None
+
+        # Build enrich callback if --enrich flag set
+        enrich_cb = None
+        if args.enrich:
+            if not args.to_batch:
+                _err("--enrich requires --to-batch FILE to be set.")
+            else:
+                keys = load_api_keys()
+                missing = [k for k in ("abuseipdb", "virustotal", "greynoise", "shodan") if not keys.get(k)]
+                if missing and not _QUIET:
+                    keys = interactive_key_setup(keys)
+
+                def enrich_cb(ip_list):
+                    results = []
+                    total   = len(ip_list)
+                    for i, ip_str in enumerate(ip_list, 1):
+                        if not _QUIET and total > 1:
+                            print(f"\n{'─'*52}")
+                            print(f"[{i}/{total}]  {ip_str}")
+                        results.append(process_ip(ip_str, keys))
+                    log_result_atomic(results)
+                    if args.export:
+                        export_csv(results, args.export)
+                    if args.ioc:
+                        export_iocs(results, args.ioc)
+                    if args.report:
+                        report_module.generate(results, args.report)
+
         threat_intel.display_news(
             max_items=args.news_max,
             keywords=kws,
             since=args.news_since,
             save_path=args.news_save,
+            extract_iocs=args.ioc_extract,
+            to_batch=args.to_batch,
+            enrich_callback=enrich_cb,
         )
+        return
+
+    if args.pdf:
+        pdf_result = pdf_module.extract_iocs_from_pdf(args.pdf)
+        pdf_module.display_pdf_iocs(pdf_result)
+
+        extracted_ips = pdf_result.get("threat_iocs", {}).get("ipv4", [])
+
+        if args.to_batch and extracted_ips:
+            try:
+                with open(args.to_batch, "w", encoding="utf-8") as f:
+                    f.write(f"# ThreatCheck PDF IOC Batch\n")
+                    f.write(f"# Source: {args.pdf}\n")
+                    f.write(f"# {len(extracted_ips)} IP(s) extracted\n\n")
+                    for ip in extracted_ips:
+                        f.write(ip + "\n")
+                _log(f"Extracted IPs written to: {args.to_batch}")
+            except IOError as e:
+                _err(f"Error writing batch file: {e}")
+
+        if args.enrich and extracted_ips:
+            if not args.to_batch:
+                _err("--enrich requires --to-batch FILE to be set.")
+            else:
+                keys = load_api_keys()
+                missing = [k for k in ("abuseipdb", "virustotal", "greynoise", "shodan") if not keys.get(k)]
+                if missing and not _QUIET:
+                    keys = interactive_key_setup(keys)
+
+                _log(f"Enriching {len(extracted_ips)} IP(s) from PDF...")
+                results = []
+                total   = len(extracted_ips)
+                for i, ip_str in enumerate(extracted_ips, 1):
+                    if not _QUIET and total > 1:
+                        print(f"\n{'─'*52}")
+                        print(f"[{i}/{total}]  {ip_str}")
+                    results.append(process_ip(ip_str, keys))
+
+                log_result_atomic(results)
+                if args.export:
+                    export_csv(results, args.export)
+                if args.ioc:
+                    export_iocs(results, args.ioc)
+                if args.report:
+                    report_module.generate(results, args.report)
+        return
+
+    if args.taxii:
+        if not taxii_module.check_dependency():
+            _err("taxii2-client is required for TAXII support.")
+            _err("Install it with: pip install taxii2-client")
+            return
+
+        cfg          = load_config()
+        taxii_result = taxii_module.fetch_all(
+            cfg,
+            added_after=args.taxii_since,
+            verbose=not _QUIET,
+        )
+        taxii_module.display_results(taxii_result)
+
+        extracted_ips = taxii_result.get("all_ips", [])
+
+        if args.to_batch and extracted_ips:
+            server_names = ", ".join(
+                s.get("name", "?") for s in taxii_result.get("servers", [])
+                if not s.get("error")
+            )
+            ok = taxii_module.write_batch_file(
+                extracted_ips, args.to_batch,
+                source_label=server_names or "TAXII"
+            )
+            if ok:
+                _log(f"{len(extracted_ips)} IPs written to: {args.to_batch}")
+
+        if args.enrich and extracted_ips:
+            if not args.to_batch:
+                _err("--enrich requires --to-batch FILE to be set.")
+            else:
+                keys = load_api_keys()
+                missing = [k for k in ("abuseipdb", "virustotal", "greynoise", "shodan") if not keys.get(k)]
+                if missing and not _QUIET:
+                    keys = interactive_key_setup(keys)
+
+                _log(f"Enriching {len(extracted_ips)} IP(s) from TAXII...")
+                results = []
+                total   = len(extracted_ips)
+                for i, ip_str in enumerate(extracted_ips, 1):
+                    if not _QUIET and total > 1:
+                        print(f"\n{'─'*52}")
+                        print(f"[{i}/{total}]  {ip_str}")
+                    results.append(process_ip(ip_str, keys))
+
+                log_result_atomic(results)
+                if args.export:
+                    export_csv(results, args.export)
+                if args.ioc:
+                    export_iocs(results, args.ioc)
+                if args.report:
+                    report_module.generate(results, args.report)
         return
 
     if not args.ip and not args.batch:
