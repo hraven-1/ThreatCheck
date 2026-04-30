@@ -3,5 +3,18 @@
     "virustotal_key": "",
     "greynoise_key": "",
     "shodan_key": "",
-    "ipinfo_token": ""
+    "ipinfo_token": "",
+    "taxii_servers": [
+        {
+            "name":           "My TAXII Server",
+            "url":            "https://example.com/taxii2/api-root/",
+            "collection_id":  "my-collection-id",
+            "username":       "",
+            "password":       "",
+            "api_key":        "",
+            "api_key_header": "Authorization",
+            "enabled":        false,
+            "added_after":    null
+        }
+    ]
 }
